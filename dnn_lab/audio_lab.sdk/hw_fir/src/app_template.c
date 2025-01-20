@@ -34,6 +34,14 @@ static inline long long int saturate(long long int mac);
 static inline void relu_forward(DATA* input, DATA* output, int size);
 int resultsProcessing(DATA* results, int size);
 
+DATA readPixelfromUART_opt(){
+	unsigned char in;
+	DATA out;
+	in = XUartPs_RecvByte(STDIN_BASEADDRESS);
+	out = (DATA) in;
+	return out;
+}
+
 // implement your function receiving from UART
 DATA readDATAfromUART(){ // reads a sequence of bytes and composes the DATA
 	unsigned char in1, in2;
@@ -107,6 +115,12 @@ int main(){
 
 	runTest(); // Runs the DNN with the values from weights.h
 
+	/* --- Debugging Settings ---*/
+//#define DONTASKVALUES
+
+	/* --- Optimization Settings --- */
+#define IMAGETRANOPT // Transfer of images Q0.8 instead of Q8.8
+
 	/* --- DNN Settings --- */ //until further implementation, input the DNN specific parameters here
 #define GROUP0 // TESTDNN, GROUP1, ...
 #ifdef TESTDNN
@@ -154,6 +168,7 @@ int main(){
 		DNN[i].weights_size = previous_output_size * neurons_num[i];
 		previous_output_size = neurons_num[i];
 	}
+#if !defined(DONTASKVALUES)
 	/* Load DNN */
 	for(int i = 0; i < layers_num; i++){
 		printf("Send bias for layer %d\n", i);
@@ -161,6 +176,7 @@ int main(){
 		printf("Send weights for layer %d\n", i);
 		readDATA(DNN[i].weights, DNN[i].weights_size);
 	}
+#endif
 
 //#ifdef TESTDNN // not differentiated in order for compiler optimization to work equaly
 	/* Compare gathered biases and weights with hardcoded ones
@@ -258,7 +274,11 @@ int main(){
 
 void readImage(DATA * image, int size){
 	for(int i = 0; i < size; i++){
+#ifdef IMAGETRANOPT
+		image[i] = readPixelfromUART_opt();
+#else
 		image[i] = readDATAfromUART();
+#endif
 	}
 }
 
@@ -302,7 +322,6 @@ int processTestImage(DATA * image){
 	return resultsProcessing(output_gemm2, 10);
 }
 
-// TODO: what is qf?
 
 void FC_forward(DATA* input, DATA* output, int in_s, int out_s, DATA* weights, DATA* bias, int qf) {
 	// NOTE return W * x
@@ -352,12 +371,8 @@ static inline void relu_forward(DATA* input, DATA* output, int size) {
 
 #define SIZEWA 10
 int resultsProcessing(DATA* results, int size){
-//What do you want to do with the results of the CNN? Here is the place where you should put the classifier or the detection (see YOLO detection for example)
-//The simplest classifier is a maximum search for the results which returns the index value of the maximum
-
  char *labels[10]={"digit 0", "digit 1", "digit 2", "digit 3", "digit 4", "digit 5", "digit 6", "digit 7", "digit 8", "digit 9"};
 
-// TODO: check the size parameter
   int size_wa = SIZEWA;
   float  r[SIZEWA];
   int  c[SIZEWA];
@@ -404,10 +419,5 @@ int resultsProcessing(DATA* results, int size){
       topval=results_float[i];
     }
   }
-  //xil_printf("\n\n");
-  //for (int i =0;i<5;i++){
-//	  xil_printf("            TOP %d: [%d] %s   \n",i, c[i], labels[c[i]]);
-  //}
-  //xil_printf("max= %x \n",top0);
   return top0;
 }

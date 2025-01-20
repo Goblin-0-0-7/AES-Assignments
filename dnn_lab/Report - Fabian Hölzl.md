@@ -33,6 +33,12 @@ while (!XUartPs_IsReceiveData(STDIN_BASEADDRESS)) {
 
 An average was taken of the times for identifying the numbers 0, 3 and 7. This presented it as useful because the time it took for the image to be sent from RealTerm to the Zybo z7 experienced some fluctuations. These were probably caused by other factors.  
 
+&nbsp;
+
+&nbsp;
+
+&nbsp;
+
 Also different compiler optimizations were used, these were:  
 - -NONE / -O0
 - -O1
@@ -55,6 +61,14 @@ Later we will also compare the receive bitrate with the send bitrate in [2.3](##
 ### 2.3 Time for processing the image
 The processing time of the image was significantly reduced by compiler optimizations. Starting from 4.01ms (test DNN) and 3.87ms (group 0 DNN) and going down to 0.197ms (test DNN) and 0.195ms (Group 0 DNN) for -O3 optimization. A summary of the measurements can be found in the table below.
 It can be seen that having one layer less in the group 0 DNN reduces the time of computation by 0.14ms, but with higher optimization this slight gain is reduced to only 0.002ms.  
+
+&nbsp;
+
+&nbsp;
+
+&nbsp;
+
+&nbsp;
 
 |  DNN  |  Optimization  |  tics  |  time in ms  |
 |:-----:|:--------------:|:------:|:------------:|
@@ -90,6 +104,14 @@ MACS_layer1 = 64 x 10 = 640
 MACS_total = 50176 + 640 = 50816  
 OPS = 2 * 50816 = <u>101632</u>
 
+&nbsp;
+
+&nbsp;
+
+&nbsp;
+
+&nbsp;
+
 
 With these numbers we can calculate the GOPS/s:
 |  DNN  |  Optimization  |  GOPS/s in 1/s  |
@@ -121,6 +143,14 @@ The linker script defines four memory regions:
 |    ps7_ram_0    |      0x0    |   0x30000   |
 |    ps7_ram_1    |     0xFFFF0000     |  0xFE00    |
 
+
+&nbsp;
+
+&nbsp;
+
+&nbsp;
+
+&nbsp;
 
 The dynamically allocated memory can be found in the sections:
 - .heap
@@ -158,3 +188,28 @@ All of these sections are based in the ps7_ddr_0 region.
 
 ### 2.5 Conclusion
 In order to optimize the time for the image classification with the Zybo z7 the main focus should be in optimizing the transfer of the image. For small neural networks, as we deploy here, a optimization of the algorithm is secondary. Although it would be possible to improve the multiply and accumulate steps with NEON intrinsics, done similarly in the previous lab. 
+
+&nbsp;
+
+&nbsp;
+
+&nbsp;
+
+## 3 Optimization
+
+### Image Transfer Optimization
+In order to save time when sending the the image, the files where converted from Q8.8 format to Q0.8 using the
+`remove_zeros.py` script. With the small addition of a new receive function
+```c
+DATA readPixelfromUART_opt(){
+	unsigned char in;
+	DATA out;
+	in = XUartPs_RecvByte(STDIN_BASEADDRESS);
+	out = (DATA) in;
+	return out;
+}
+```
+the image can now be sent in half the time.  
+The time for receiving the image goes down from 841ms to only 380ms with a bitrate of 16.52 kbit/s.
+Reason for the change of bitrate might be because of only three samples taken after the optimization.  
+The complete measurements can be found in the file `optimized-performance.xlsx`.
