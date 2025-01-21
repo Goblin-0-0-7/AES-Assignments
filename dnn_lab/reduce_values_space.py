@@ -1,7 +1,6 @@
 import os
 dir = os.path.dirname(__file__)
 files_dir = dir + "/example/weights/"
-bias_dir = files_dir + "Gemm0_biases.bin"
 
 layers = 3
 biases_dir = []
@@ -11,14 +10,13 @@ for i in range(layers):
     weights_dir.append(files_dir + f"Gemm{i}_weights.bin")
 
 
-
-def reduce_space(dirs, name:str):
+def reduce_space(dirs, name:str, save_dir):
     current_number = 0
     for i in range(len(dirs)):
         current_dir = dirs[current_number]
         file = open(current_dir, "rb")
 
-        new_file = open(f"{files_dir}Gemm{current_number}_{name}_new.bin", "wb")
+        new_file = open(f"{save_dir}Gemm{current_number}_{name}_new.bin", "wb")
         b = file.read(1)
         data_b = b
         even = False
@@ -43,5 +41,5 @@ def reduce_space(dirs, name:str):
         current_number += 1
 
 
-reduce_space(weights_dir, "weights")
-reduce_space(biases_dir, "biases")
+reduce_space(weights_dir, "weights", files_dir)
+reduce_space(biases_dir, "biases", files_dir)

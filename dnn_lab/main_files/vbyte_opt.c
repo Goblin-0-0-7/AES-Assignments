@@ -18,6 +18,7 @@
 #define n_weights2 320
 
 typedef short int DATA;
+typedef unsigned char vbyte;
 
 #define FIXED2FLOAT(a, qf) (((float) (a)) / (1<<qf))
 #define FLOAT2FIXED(a, qf) ((short int) round((a) * (1<<qf)))
@@ -30,17 +31,19 @@ typedef short int DATA;
 
 /* --- Debugging Settings ---*/
 //#define DONTASKVALUES
-#define DEBUGSENDVALUES
+//#define DEBUGSENDVALUES
 
 /* --- Optimization Settings --- */
 #define IMAGETRANOPT // Transfer of images Q0.8 instead of Q8.8
-//#define VALUESTRANSOPT // Transfer of the bias/weight values with Q1.7 instead of Q8.8
+#define VALUESTRANSOPT // Transfer of the bias/weight values with Q1.7 instead of Q8.8
+#define MEMORYOPT
 
 // DNN functions to compose your network
 
 void FC_forward(DATA* input, DATA* output, int in_s, int out_s, DATA* weights, DATA* bias, int qf) ;
 static inline long long int saturate(long long int mac);
 static inline void relu_forward(DATA* input, DATA* output, int size);
+static inline void relu_forward2(vbyte* input, vbyte* output, int size);
 int resultsProcessing(DATA* results, int size);
 
 DATA readPixelfromUART_opt(){
@@ -49,6 +52,12 @@ DATA readPixelfromUART_opt(){
 	in = XUartPs_RecvByte(STDIN_BASEADDRESS);
 	out = (DATA) in;
 	return out;
+}
+
+vbyte readPixelfromUART_opt2(){
+	unsigned char in;
+	in = XUartPs_RecvByte(STDIN_BASEADDRESS);
+	return in;
 }
 
 DATA readQ1_7ValuesFromUart(){
@@ -66,6 +75,12 @@ DATA readQ1_7ValuesFromUart(){
 	return out;
 }
 
+vbyte readQ1_7ValuesFromUart2(){
+	unsigned char in;
+	in = XUartPs_RecvByte(STDIN_BASEADDRESS);
+	return in;
+}
+
 // implement your function receiving from UART
 DATA readDATAfromUART(){ // reads a sequence of bytes and composes the DATA
 	unsigned char in1, in2;
@@ -74,6 +89,16 @@ DATA readDATAfromUART(){ // reads a sequence of bytes and composes the DATA
 	in2 = XUartPs_RecvByte(STDIN_BASEADDRESS);
 	out = (in2 << 8) | in1;
 	return out;
+}
+
+void readVByte(vbyte * pArray, int len){
+	for(int i = 0; i < len; i++){
+#if defined(VALUESTRANSOPT) && defined(MEMORYOPT)
+		pArray[i] = readQ1_7ValuesFromUart2();
+#else
+		printf("Read vbyte does not work with this setup!\n");
+#endif
+	}
 }
 
 void readDATA(DATA * pArray, int len){
@@ -114,6 +139,15 @@ typedef struct{
 	DATA * weights; // size == input_size * neurons
 } layer;
 
+typedef struct{
+	int neurons;
+	int input_size;
+	int weights_size;
+	vbyte * input; // size == output of previous layer
+	vbyte * output; // size == neurons
+	vbyte * bias; // size == neurons
+	vbyte * weights; // size == input_size * neurons
+} layer2;
 
 int main(){
 	init_platform();
@@ -159,7 +193,11 @@ int main(){
 
 	/* --- DNN setup --- */
 	/* Construct DNN */
+#ifdef MEMORYOPT
+	layer2* DNN = (layer2*) malloc(layers_num * sizeof(layer2));
+#else
 	layer* DNN = (layer*) malloc(layers_num * sizeof(layer));
+#endif
 	if (DNN == NULL){
 		printf("Malloc failure: DNN");
 		return 1;
@@ -167,23 +205,39 @@ int main(){
 	int previous_output_size = input_image_size;
 	for(int i = 0; i < layers_num; i++){
 		DNN[i].neurons = neurons_num[i];
+#ifdef MEMORYOPT
+		DNN[i].input = (vbyte*) calloc(previous_output_size, sizeof(vbyte));
+#else
 		DNN[i].input = (DATA*) calloc(previous_output_size, sizeof(DATA));
+#endif
 		if (DNN[i].input == NULL){
 			printf("Malloc failure: DNN[%d].input", i);
 			return 1;
 		}
 		DNN[i].input_size = previous_output_size;
+#ifdef MEMORYOPT
+		DNN[i].output = (vbyte*) calloc(neurons_num[i], sizeof(vbyte));
+#else
 		DNN[i].output = (DATA*) calloc(neurons_num[i], sizeof(DATA));
+#endif
 		if (DNN[i].output == NULL){
 			printf("Malloc failure: DNN[%d].output", i);
 			return 1;
 		}
+#ifdef MEMORYOPT
+		DNN[i].bias = (vbyte*) calloc(neurons_num[i], sizeof(vbyte));
+#else
 		DNN[i].bias = (DATA*) calloc(neurons_num[i], sizeof(DATA));
+#endif
 		if (DNN[i].bias == NULL){
 			printf("Malloc failure: DNN[%d].bias", i);
 			return 1;
 		}
+#ifdef MEMORYOPT
+		DNN[i].weights = (vbyte*) calloc(neurons_num[i] * previous_output_size, sizeof(vbyte));
+#else
 		DNN[i].weights = (DATA*) calloc(neurons_num[i] * previous_output_size, sizeof(DATA));
+#endif
 		if (DNN[i].weights == NULL){
 			printf("Malloc failure: DNN[%d].weights", i);
 			return 1;
@@ -199,6 +253,7 @@ int main(){
 	int T2 = 0;
 	int dTic = 0;
 	float dT = 0;
+
 	/* Load DNN */
 	for(int i = 0; i < layers_num; i++){
 		printf("Send bias for layer %d\n", i);
@@ -206,7 +261,11 @@ int main(){
 			; // wait unitl first byte of the image is sent before starting the timer
 		}
 		T1 = Xil_In32(GLOBAL_TMR_BASEADDR);
+#ifdef MEMORYOPT
+		readVByte(DNN[i].bias, DNN[i].neurons);
+#else
 		readDATA(DNN[i].bias, DNN[i].neurons);
+#endif
 		T2 = Xil_In32(GLOBAL_TMR_BASEADDR);
 		dTic = T2 - T1;
 		dT = dTic / CLOCKFREQ,
@@ -216,7 +275,11 @@ int main(){
 			; // wait unitl first byte of the image is sent before starting the timer
 		}
 		T1 = Xil_In32(GLOBAL_TMR_BASEADDR);
+#ifdef MEMORYOPT
+		readVByte(DNN[i].weights, DNN[i].weights_size);
+#else
 		readDATA(DNN[i].weights, DNN[i].weights_size);
+#endif
 		T2 = Xil_In32(GLOBAL_TMR_BASEADDR);
 		dTic = T2 - T1;
 		dT = dTic / CLOCKFREQ,
@@ -227,8 +290,9 @@ int main(){
 	}
 #endif
 
-	/* Test sent DNN on test images */
 	int result = -1;
+#if !defined(MEMORYOPT)
+	/* Test sent DNN on test images */
 	int test_true = 0;
 	int test_false = 0;
 	for (int i=0; i<=9; i++){
@@ -245,6 +309,7 @@ int main(){
 	}
 
 	printf("%d/%d test images correctly identified\n", test_true, (test_true + test_false));
+#endif
 
 	/* Variables for timing */
 	int t1 = 0;
@@ -260,14 +325,22 @@ int main(){
 	float dt_sendRespond = 0;
 	float dt_respondTime = 0.0;
 
+#ifdef MEMORYOPT
+	vbyte image[28*28] = {0};
+#else
 	DATA image[28*28] = {0};
+#endif
 	while (1){
 		printf("Waiting for the image...\n");
 		while (!XUartPs_IsReceiveData(STDIN_BASEADDRESS)) {
 			; // wait unitl first byte of the image is sent before starting the timer
 		}
 		t1 = Xil_In32(GLOBAL_TMR_BASEADDR);
+#ifdef MEMORYOPT
+		readImage2(DNN[0].input, input_image_size);
+#else
 		readImage(DNN[0].input, input_image_size);
+#endif
 		t2 = Xil_In32(GLOBAL_TMR_BASEADDR);
 		result = processImage(DNN, layers_num);
 		t3 = Xil_In32(GLOBAL_TMR_BASEADDR);
@@ -313,16 +386,32 @@ void readImage(DATA * image, int size){
 	}
 }
 
+void readImage2(vbyte * image, int size){
+	for(int i = 0; i < size; i++){
+#if defined(IMAGETRANOPT) && defined(MEMORYOPT) && defined(VALUESTRANSOPT)
+		image[i] = readPixelfromUART_opt2();
+#else
+		printf("Read Image does not work with this setup!");
+#endif
+	}
+}
 
 int processImage(layer * dnn, int dnn_depth) {
+#ifdef MEMORYOPT
+	for(int i = 0; i < dnn_depth - 1; i++){
+		FC_forward2(dnn[i].input, dnn[i].output, dnn[i].input_size, dnn[i].neurons, dnn[i].weights, dnn[i].bias, 7);
+		relu_forward2(dnn[i].output, dnn[i+1].input, dnn[i].neurons);
+	}
+	FC_forward2(dnn[dnn_depth-1].input, dnn[dnn_depth-1].output, dnn[dnn_depth-1].input_size, dnn[dnn_depth-1].neurons, dnn[dnn_depth-1].weights, dnn[dnn_depth-1].bias, 7);
+	return resultsProcessing2(dnn[dnn_depth-1].output, dnn[dnn_depth-1].neurons);
+#else
 	for(int i = 0; i < dnn_depth - 1; i++){
 		FC_forward(dnn[i].input, dnn[i].output, dnn[i].input_size, dnn[i].neurons, dnn[i].weights, dnn[i].bias, 8);
 		relu_forward(dnn[i].output, dnn[i+1].input, dnn[i].neurons);
 	}
 	FC_forward(dnn[dnn_depth-1].input, dnn[dnn_depth-1].output, dnn[dnn_depth-1].input_size, dnn[dnn_depth-1].neurons, dnn[dnn_depth-1].weights, dnn[dnn_depth-1].bias, 8);
 	return resultsProcessing(dnn[dnn_depth-1].output, dnn[dnn_depth-1].neurons);
-
-
+#endif
 }
 
 void runTest(){
@@ -355,7 +444,6 @@ int processTestImage(DATA * image){
 
 
 void FC_forward(DATA* input, DATA* output, int in_s, int out_s, DATA* weights, DATA* bias, int qf) {
-	// NOTE return W * x
 	int hkern = 0;
 	int wkern = 0;
 	long long int mac = 0;
@@ -370,6 +458,26 @@ void FC_forward(DATA* input, DATA* output, int in_s, int out_s, DATA* weights, D
 			mac += current * weights[hkern*in_s + wkern];
 		}
 		output[hkern] = (DATA)(mac >> qf);
+	}
+}
+
+
+void FC_forward2(vbyte* input, vbyte* output, int in_s, int out_s, vbyte* weights, vbyte* bias, int qf) {
+
+	int hkern = 0;
+	int wkern = 0;
+	long long int mac = 0;
+	vbyte current = 0;
+
+	/* foreach row in kernel */
+//	#pragma omp parallel for private (hkern, wkern, mac, current)
+	for (hkern = 0; hkern < out_s; hkern++) {
+		mac = ((long long int)bias[hkern]) << qf;
+		for (wkern = 0; wkern < in_s; wkern++) {
+			current = input[wkern];
+			mac += current * weights[hkern*in_s + wkern];
+		}
+		output[hkern] = (vbyte) saturate((mac >> qf));
 	}
 }
 
@@ -400,9 +508,19 @@ static inline void relu_forward(DATA* input, DATA* output, int size) {
 	}
 }
 
+static inline void relu_forward2(vbyte* input, vbyte* output, int size) {
+	int i = 0;
+	for(i = 0; i < size; i++) {
+		vbyte v = input[i];
+		v = v > 0 ? v : 0;
+		output[i] = v;
+	}
+}
+
 #define SIZEWA 10
 int resultsProcessing(DATA* results, int size){
- char *labels[10]={"digit 0", "digit 1", "digit 2", "digit 3", "digit 4", "digit 5", "digit 6", "digit 7", "digit 8", "digit 9"};
+  char *labels[10]={"digit 0", "digit 1", "digit 2", "digit 3", "digit 4", "digit 5", "digit 6", "digit 7", "digit 8", "digit 9"};
+
 
   int size_wa = SIZEWA;
   float  r[SIZEWA];
@@ -412,43 +530,105 @@ int resultsProcessing(DATA* results, int size){
   DATA max=0;
   int max_i;
   for (int i =0;i<size_wa;i++){
-      results_float[i] = FIXED2FLOAT(results[i],8);
-    int n;
-    if (results[i]>0)
-      n=results[i];
-    else
-      n=-results[i];
-    if (n>max){
-      max=n;
-      max_i=i;
-    }
+	  results_float[i] = FIXED2FLOAT(results[i],8);
+	int n;
+	if (results[i]>0)
+	  n=results[i];
+	else
+	  n=-results[i];
+	if (n>max){
+	  max=n;
+	  max_i=i;
+	}
   }
   for (int i =0;i<size_wa;i++)
-    sum+=exp(results_float[i]);
+	sum+=exp(results_float[i]);
 
   for (int i =0;i<size_wa;i++){
-    r[i]=exp(results_float[i]) / sum;
-    c[i]=i;
+	r[i]=exp(results_float[i]) / sum;
+	c[i]=i;
   }
   for (int i =0;i<size_wa;i++){
-    for (int j =i;j<size_wa;j++){
-      if (r[j]>r[i]){
-        float t= r[j];
-        r[j]=r[i];
-        r[i]=t;
-        int tc= c[j];
-        c[j]=c[i];
-        c[i]=tc;
-      }
-    }
+	for (int j =i;j<size_wa;j++){
+	  if (r[j]>r[i]){
+		float t= r[j];
+		r[j]=r[i];
+		r[i]=t;
+		int tc= c[j];
+		c[j]=c[i];
+		c[i]=tc;
+	  }
+	}
   }
   int top0=0;
   float topval=results_float[0];
   for (int i =1;i<size_wa;i++){
-    if (results_float[i]>topval){
-      top0=i;
-      topval=results_float[i];
-    }
+	if (results_float[i]>topval){
+	  top0=i;
+	  topval=results_float[i];
+	}
+  }
+  return top0;
+}
+
+int resultsProcessing2(vbyte* results, int size){
+  char *labels[10]={"digit 0", "digit 1", "digit 2", "digit 3", "digit 4", "digit 5", "digit 6", "digit 7", "digit 8", "digit 9"};
+
+
+  int size_wa = SIZEWA;
+  float  r[SIZEWA];
+  int  c[SIZEWA];
+  float results_float[SIZEWA];
+  float sum=0.0;
+  DATA max=0;
+  int max_i;
+  DATA result = 0;
+  DATA sign = 0x0000;
+  for (int i =0;i<size_wa;i++){
+	  if (results[i] & 0x80){
+		  sign = 0xFF00;
+	  }
+	  else {
+		  sign = 0x0000;
+	  }
+	  result = (results[i] << 1) | sign;
+	  results_float[i] = FIXED2FLOAT(result,7);
+	int n;
+	if (results[i]>0)
+	  n=results[i];
+	else
+	  n=-results[i];
+	if (n>max){
+	  max=n;
+	  max_i=i;
+	}
+  }
+  for (int i =0;i<size_wa;i++)
+	sum+=exp(results_float[i]);
+
+  for (int i =0;i<size_wa;i++){
+	r[i]=exp(results_float[i]) / sum;
+	c[i]=i;
+  }
+  for (int i =0;i<size_wa;i++){
+	for (int j =i;j<size_wa;j++){
+	  if (r[j]>r[i]){
+		float t= r[j];
+		r[j]=r[i];
+		r[i]=t;
+		int tc= c[j];
+		c[j]=c[i];
+		c[i]=tc;
+	  }
+	}
+  }
+  int top0=0;
+  float topval=results_float[0];
+  for (int i =1;i<size_wa;i++){
+	if (results_float[i]>topval){
+	  top0=i;
+	  topval=results_float[i];
+	}
   }
   return top0;
 }

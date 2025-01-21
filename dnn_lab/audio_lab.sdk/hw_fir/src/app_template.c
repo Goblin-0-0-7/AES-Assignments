@@ -27,6 +27,15 @@ typedef short int DATA;
 
 #define CLOCKFREQ 333000000.0 // 333 MHz
 
+
+/* --- Debugging Settings ---*/
+//#define DONTASKVALUES
+#define DEBUGSENDVALUES
+
+/* --- Optimization Settings --- */
+#define IMAGETRANOPT // Transfer of images Q0.8 instead of Q8.8
+//#define VALUESTRANSOPT // Transfer of the bias/weight values with Q1.7 instead of Q8.8
+
 // DNN functions to compose your network
 
 void FC_forward(DATA* input, DATA* output, int in_s, int out_s, DATA* weights, DATA* bias, int qf) ;
@@ -42,6 +51,21 @@ DATA readPixelfromUART_opt(){
 	return out;
 }
 
+DATA readQ1_7ValuesFromUart(){
+	unsigned char in;
+	DATA sign, out;
+	in = XUartPs_RecvByte(STDIN_BASEADDRESS);
+
+	if (in & 0x80){
+		sign = 0xFF00;
+	}
+	else{
+		sign = 0x0000;
+	}
+	out = (DATA) (in << 1) | sign;
+	return out;
+}
+
 // implement your function receiving from UART
 DATA readDATAfromUART(){ // reads a sequence of bytes and composes the DATA
 	unsigned char in1, in2;
@@ -54,7 +78,11 @@ DATA readDATAfromUART(){ // reads a sequence of bytes and composes the DATA
 
 void readDATA(DATA * pArray, int len){
 	for(int i = 0; i < len; i++){
+#ifdef VALUESTRANSOPT
+		pArray[i] = readQ1_7ValuesFromUart();
+#else
 		pArray[i] = readDATAfromUART();
+#endif
 	}
 }
 
@@ -115,14 +143,9 @@ int main(){
 
 	runTest(); // Runs the DNN with the values from weights.h
 
-	/* --- Debugging Settings ---*/
-//#define DONTASKVALUES
-
-	/* --- Optimization Settings --- */
-#define IMAGETRANOPT // Transfer of images Q0.8 instead of Q8.8
 
 	/* --- DNN Settings --- */ //until further implementation, input the DNN specific parameters here
-#define GROUP0 // TESTDNN, GROUP1, ...
+#define TESTDNN // TESTDNN, GROUP1, ...
 #ifdef TESTDNN
 	int layers_num = 3;
 	int input_image_size = 784;
@@ -168,33 +191,41 @@ int main(){
 		DNN[i].weights_size = previous_output_size * neurons_num[i];
 		previous_output_size = neurons_num[i];
 	}
+#ifdef DEBUGSENDVALUES
+	while(1){
+#endif
 #if !defined(DONTASKVALUES)
+	int T1 = 0;
+	int T2 = 0;
+	int dTic = 0;
+	float dT = 0;
 	/* Load DNN */
 	for(int i = 0; i < layers_num; i++){
 		printf("Send bias for layer %d\n", i);
+		while (!XUartPs_IsReceiveData(STDIN_BASEADDRESS)) {
+			; // wait unitl first byte of the image is sent before starting the timer
+		}
+		T1 = Xil_In32(GLOBAL_TMR_BASEADDR);
 		readDATA(DNN[i].bias, DNN[i].neurons);
+		T2 = Xil_In32(GLOBAL_TMR_BASEADDR);
+		dTic = T2 - T1;
+		dT = dTic / CLOCKFREQ,
+		printf("Sending bias for layer %d took: %d tics or %.6f sec\n", i, dTic, dT);
 		printf("Send weights for layer %d\n", i);
+		while (!XUartPs_IsReceiveData(STDIN_BASEADDRESS)) {
+			; // wait unitl first byte of the image is sent before starting the timer
+		}
+		T1 = Xil_In32(GLOBAL_TMR_BASEADDR);
 		readDATA(DNN[i].weights, DNN[i].weights_size);
+		T2 = Xil_In32(GLOBAL_TMR_BASEADDR);
+		dTic = T2 - T1;
+		dT = dTic / CLOCKFREQ,
+		printf("Sending weights for layer %d took: %d tics or %.6f sec\n", i, dTic, dT);
 	}
 #endif
-
-//#ifdef TESTDNN // not differentiated in order for compiler optimization to work equaly
-	/* Compare gathered biases and weights with hardcoded ones
-	 * in order to check if the transfer worked as intended */
-	int checkFlag = -1;
-	DATA* gemm_biases[3] = {&gemm0_bias, &gemm1_bias, &gemm2_bias};
-	DATA* gemm_weights[3] = {&gemm0_weights, &gemm1_weights, &gemm2_weights};
-	for(int i = 0; i < 3; i++){
-		checkFlag = memcmp(DNN[i].bias, gemm_biases[i], DNN[i].neurons);
-		if (checkFlag != 0) {
-			printf("Bias %d is not equal\n", i);
-		}
-		checkFlag = memcmp(DNN[i].weights, gemm_weights[i], DNN[i].neurons);
-		if (checkFlag != 0) {
-			printf("Weights %d is not equal\n", i);
-		}
+#ifdef DEBUGSENDVALUES
 	}
-//#endif
+#endif
 
 	/* Test sent DNN on test images */
 	int result = -1;
@@ -310,7 +341,7 @@ void runTest(){
 		}
 	}
 
-	xil_printf("%d/%d test images correctly identified\n", test_true, (test_true + test_false));
+	printf("%d/%d test images correctly identified\n", test_true, (test_true + test_false));
 }
 
 int processTestImage(DATA * image){
