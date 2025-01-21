@@ -30,10 +30,10 @@ typedef short int DATA;
 
 /* --- Debugging Settings ---*/
 //#define DONTASKVALUES
-#define DEBUGSENDVALUES
+//#define DEBUGSENDVALUES
 
 /* --- Optimization Settings --- */
-#define IMAGETRANOPT // Transfer of images Q0.8 instead of Q8.8
+//#define IMAGETRANOPT // Transfer of images Q0.8 instead of Q8.8
 //#define VALUESTRANSOPT // Transfer of the bias/weight values with Q1.7 instead of Q8.8
 
 // DNN functions to compose your network
